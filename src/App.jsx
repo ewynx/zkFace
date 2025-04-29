@@ -1,11 +1,51 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "@vladmandic/face-api";
+import circuit from "./circuits/simple_eq.json";
+import { UltraHonkBackend } from "@aztec/bb.js";
+import { Noir } from "@noir-lang/noir_js";
+
+const SCALE = 2 ** 16;
+const MATCH_THRESHOLD = 1_500_000_000;
+
+function quantize(embedding) {
+  return embedding.map((f) => Math.round(f * SCALE));
+}
+
+function euclideanSquaredDistance(a, b) {
+  if (a.length !== b.length) throw new Error("Mismatched lengths");
+  return a.reduce((sum, ai, i) => {
+    const diff = ai - b[i];
+    return sum + diff * diff;
+  }, 0);
+}
+
+const runZKEqualityProof = async (x, y) => {
+  const noir = new Noir(circuit);
+  const backend = new UltraHonkBackend(circuit.bytecode);
+
+  try {
+    console.log("x,y ", x, y)
+    console.log("executing circuit")
+    const { witness } = await noir.execute({ x, y });
+    console.log("generating proof")
+    const proof = await backend.generateProof(witness);
+    console.log("verifying proof")
+    const isValid = await backend.verifyProof(proof);
+    console.log("proof is valid? ", isValid)
+    return isValid;
+  } catch (err) {
+    console.error("Error in ZK circuit:", err);
+    return false;
+  }
+};
 
 function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [status, setStatus] = useState("Loading models...");
-  const [embedding, setEmbedding] = useState(null);
+  const [registered, setRegistered] = useState(null);
+  const [matchResult, setMatchResult] = useState(null);
+  const [distance, setDistance] = useState(null);
 
   useEffect(() => {
     const loadModels = async () => {
@@ -14,28 +54,17 @@ function App() {
       await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
       await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
       setStatus("Models loaded");
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoRef.current.srcObject = stream;
     };
 
-    const startCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.error("Could not access the camera:", err);
-        setStatus("Camera access error");
-      }
-    };
-
-    loadModels().then(startCamera);
+    loadModels();
   }, []);
 
-  const handleDetection = async () => {
+  const detectEmbedding = async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-
-    if (!video || !canvas) return;
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -45,17 +74,47 @@ function App() {
       .withFaceLandmarks()
       .withFaceDescriptor();
 
-    const context = canvas.getContext("2d");
-    context.clearRect(0, 0, canvas.width, canvas.height);
-
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
     if (detection) {
       faceapi.draw.drawDetections(canvas, [detection.detection]);
-      setEmbedding(detection.descriptor);
-      setStatus("Embedding generated ✅");
+      return Array.from(detection.descriptor);
     } else {
-      setEmbedding(null);
       setStatus("No face detected");
+      return null;
     }
+  };
+
+  const handleRegister = async () => {
+    const embedding = await detectEmbedding();
+    if (!embedding) return;
+
+    const quantized = quantize(embedding);
+    setRegistered(quantized);
+    setMatchResult(null);
+    setDistance(null);
+    setStatus("Face registered");
+  };
+
+  const handleRecognize = async () => {
+    if (!registered) {
+      setStatus("Register a face");
+      return;
+    }
+
+    const embedding = await detectEmbedding();
+    if (!embedding) return;
+
+    const quantized = quantize(embedding);
+    const distSq = euclideanSquaredDistance(registered, quantized);
+    setDistance(distSq);
+
+    // ZK proof on 1st value only (just for test)
+    const zkProofOK = await runZKEqualityProof(registered, quantized);
+
+    const match = distSq < MATCH_THRESHOLD && zkProofOK;
+
+    setMatchResult(match);
+    setStatus(match ? "Match: ✅" : "Match: ❌");
   };
 
   return (
@@ -79,15 +138,18 @@ function App() {
           }}
         />
       </div>
-      <pre style={{ marginTop: "2rem", whiteSpace: "pre-wrap" }}>
-        {embedding
-          ? JSON.stringify(
-              embedding.map((v) => +v.toFixed(6)),
-              null,
-              2
-            )
-          : "Waiting for embedding..."}
-      </pre>
+
+      <div style={{ marginTop: "1rem", display: "flex", gap: "1rem" }}>
+        <button onClick={handleRegister}>📸 Register face</button>
+        <button onClick={handleRecognize}>🔍 Verify face</button>
+      </div>
+
+      {distance !== null && (
+        <p>
+          <strong>Distance²:</strong> {distance} <br />
+          <strong>Result:</strong> {matchResult ? "✅ Match" : "❌ Match"}
+        </p>
+      )}
     </div>
   );
 }
