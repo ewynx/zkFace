@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "@vladmandic/face-api";
-import circuit from "./circuits/simple_eq.json";
+import circuit from "./circuits/face_eq.json";
 import { UltraHonkBackend } from "@aztec/bb.js";
 import { Noir } from "@noir-lang/noir_js";
 
@@ -19,14 +19,18 @@ function euclideanSquaredDistance(a, b) {
   }, 0);
 }
 
-const runZKEqualityProof = async (x, y) => {
+const runZKEqualityProof = async (xRaw, yRaw) => {
   const noir = new Noir(circuit);
   const backend = new UltraHonkBackend(circuit.bytecode);
 
+  // Wrap each value in { x: value } to match `Quantized` struct
+  const x = xRaw.map((v) => ({ x: v }));
+  const registered = yRaw.map((v) => ({ x: v }));
   try {
-    console.log("x,y ", x, y)
+    console.log("x,registered ", x, registered)
     console.log("executing circuit")
-    const { witness } = await noir.execute({ x, y });
+    // TOCO check which one is registered
+    const { witness } = await noir.execute({ x, registered });
     console.log("generating proof")
     const proof = await backend.generateProof(witness);
     console.log("verifying proof")
@@ -100,44 +104,74 @@ function App() {
       setStatus("Register a face");
       return;
     }
-
+  
     const embedding = await detectEmbedding();
     if (!embedding) return;
-
+  
     const quantized = quantize(embedding);
     const distSq = euclideanSquaredDistance(registered, quantized);
     setDistance(distSq);
-
-    // ZK proof on 1st value only (just for test)
+  
+    setMatchResult("pending");
+  
     const zkProofOK = await runZKEqualityProof(registered, quantized);
-
     const match = distSq < MATCH_THRESHOLD && zkProofOK;
-
+  
     setMatchResult(match);
     setStatus(match ? "Match: ✅" : "Match: ❌");
   };
+  
 
+  const handleDetection = async () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+  
+    if (!video || !canvas || video.readyState !== 4) return;
+  
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  
+    const detection = await faceapi
+      .detectSingleFace(video)
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+  
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+    if (detection) {
+      faceapi.draw.drawDetections(canvas, [detection.detection]);
+    }
+  };
+  
   return (
     <div style={{ padding: "2rem", fontFamily: "sans-serif" }}>
       <h2>🎥 zkFace: Webcam Detection</h2>
       <p>{status}</p>
-      <div style={{ position: "relative", maxWidth: "600px" }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          onPlay={() => setInterval(handleDetection, 1000)}
-          style={{ width: "100%", borderRadius: "10px" }}
-        />
-        <canvas
-          ref={canvasRef}
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-          }}
-        />
-      </div>
+      {matchResult === "pending" ? (
+        <div style={{ height: "360px", display: "flex", justifyContent: "center", alignItems: "center", border: "2px dashed gray", borderRadius: "10px" }}>
+          <p style={{ fontSize: "1.2rem" }}>⏳ Generating ZK proof, please wait...</p>
+        </div>
+      ) : (
+        <div style={{ position: "relative", maxWidth: "600px" }}>
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            onPlay={() => setInterval(handleDetection, 1000)}
+            style={{ width: "100%", borderRadius: "10px" }}
+          />
+          <canvas
+            ref={canvasRef}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+            }}
+          />
+        </div>
+      )}
+
 
       <div style={{ marginTop: "1rem", display: "flex", gap: "1rem" }}>
         <button onClick={handleRegister}>📸 Register face</button>
@@ -147,7 +181,14 @@ function App() {
       {distance !== null && (
         <p>
           <strong>Distance²:</strong> {distance} <br />
-          <strong>Result:</strong> {matchResult ? "✅ Match" : "❌ Match"}
+          <strong>Result:</strong>{" "}
+          {matchResult === "pending"
+            ? "⏳ Generating proof..."
+            : matchResult === true
+            ? "✅ Match"
+            : matchResult === false
+            ? "❌ Match"
+            : ""}
         </p>
       )}
     </div>
