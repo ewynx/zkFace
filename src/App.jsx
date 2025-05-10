@@ -18,8 +18,10 @@ function App() {
   const intervalRef = useRef(null);
 
   useEffect(() => {
+    const base = import.meta.env.BASE_URL;
+    const modelPath = `${base}models`;
+
     const loadModels = async () => {
-      const modelPath = "/models";
       await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
       await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
       await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
@@ -33,11 +35,11 @@ function App() {
     };
 
     const img = new Image();
-    img.src = "/sun.png";
+    img.src = `${base}sun.png`;
     img.onload = () => setSunglassesImg(img);
 
     const hat = new Image();
-    hat.src = "/privacy_hat.png";
+    hat.src = `${base}privacy_hat.png`;
     hat.onload = () => setHatImg(hat);
 
     loadModels();
