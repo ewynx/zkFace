@@ -1,41 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "@vladmandic/face-api";
-import circuit from "./circuits/face_eq.json";
-import { UltraHonkBackend } from "@aztec/bb.js";
-import { Noir } from "@noir-lang/noir_js";
-
-const SCALE = 2 ** 16;
-const MATCH_THRESHOLD = 1_500_000_000;
-
-function quantize(embedding) {
-  return embedding.map((f) => Math.round(f * SCALE));
-}
-
-function euclideanSquaredDistance(a, b) {
-  if (a.length !== b.length) throw new Error("Mismatched lengths");
-  return a.reduce((sum, ai, i) => {
-    const diff = ai - b[i];
-    return sum + diff * diff;
-  }, 0);
-}
-
-const runZKEqualityProof = async (xRaw, yRaw) => {
-  const noir = new Noir(circuit);
-  const backend = new UltraHonkBackend(circuit.bytecode);
-
-  const x = xRaw.map((v) => ({ x: v }));
-  const registered = yRaw.map((v) => ({ x: v }));
-
-  try {
-    const { witness } = await noir.execute({ x, registered });
-    const proof = await backend.generateProof(witness);
-    const isValid = await backend.verifyProof(proof);
-    return isValid;
-  } catch (err) {
-    console.error("ZK circuit error:", err);
-    return false;
-  }
-};
+import {quantize, euclideanSquaredDistance, runZKEqualityProof, MATCH_THRESHOLD } from "./lib/zkFace";
 
 function App() {
   const videoRef = useRef(null);
@@ -46,7 +11,6 @@ function App() {
   const [distance, setDistance] = useState(null);
   const [sunglassesImg, setSunglassesImg] = useState(null);
   const [hatImg, setHatImg] = useState(null);
-
 
   const intervalRef = useRef(null);
 
