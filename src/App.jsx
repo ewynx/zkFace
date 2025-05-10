@@ -13,7 +13,7 @@ function App() {
   const [hatImg, setHatImg] = useState(null);
   const [registeredHash, setRegisteredHash] = useState(null);
   const [recognizedHash, setRecognizedHash] = useState(null);
-  const [celebrating, setCelebrating] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
 
   const intervalRef = useRef(null);
 
@@ -81,19 +81,26 @@ function App() {
   };
 
   const handleRegister = async () => {
-    const embedding = await detectEmbedding();
-    if (!embedding) return;
-
-    const quantized = quantize(embedding);
-    const hash = await getFaceHash(quantized);
-
-    setRegistered(quantized);
-    setRegisteredHash(hash);
-    setRecognizedHash(null);
-    setMatchResult(null);
-    setDistance(null);
-    setStatus("Face registered");
+    setIsRegistering(true);
+  
+    try {
+      const embedding = await detectEmbedding();
+      if (!embedding) return;
+  
+      const quantized = quantize(embedding);
+      const hash = await getFaceHash(quantized);
+  
+      setRegistered(quantized);
+      setRegisteredHash(hash);
+      setRecognizedHash(null);
+      setMatchResult(null);
+      setDistance(null);
+      setStatus("Face registered");
+    } finally {
+      setIsRegistering(false);
+    }
   };
+  
 
   const handleRecognize = async () => {
     if (!registered) {
@@ -122,7 +129,6 @@ function App() {
     if (match) {
       clearInterval(intervalRef.current); // Stop detection loop immediately
       intervalRef.current = null;
-      setCelebrating(true);
     
       const video = videoRef.current;
       const canvas = canvasRef.current;
@@ -171,7 +177,6 @@ function App() {
         setRecognizedHash(null);
         setDistance(null);
         setStatus("Models loaded");
-        setCelebrating(false);
       
         // Resume detection
         if (!intervalRef.current) {
@@ -251,6 +256,22 @@ function App() {
             <p style={{ fontSize: "1.2rem" }}>⏳ Generating ZK proof, please wait...</p>
           </div>
         )}
+        {isRegistering && (
+          <div style={{
+            position: "absolute",
+            zIndex: 10,
+            backgroundColor: "rgba(255,255,255,0.8)",
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            borderRadius: "10px"
+          }}>
+            <p style={{ fontSize: "1.2rem" }}>📸 Registering face, please wait...</p>
+          </div>
+        )}
+
         <video
           ref={videoRef}
           autoPlay
