@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "@vladmandic/face-api";
-import {quantize, euclideanSquaredDistance, runZKEqualityProof, MATCH_THRESHOLD } from "./lib/zkFace";
+import { quantize, euclideanSquaredDistance, runZKEqualityProof, MATCH_THRESHOLD, getFaceHash } from "./lib/zkFace";
 
 function App() {
   const videoRef = useRef(null);
@@ -11,6 +11,9 @@ function App() {
   const [distance, setDistance] = useState(null);
   const [sunglassesImg, setSunglassesImg] = useState(null);
   const [hatImg, setHatImg] = useState(null);
+  const [registeredHash, setRegisteredHash] = useState(null);
+  const [recognizedHash, setRecognizedHash] = useState(null);
+  const [celebrating, setCelebrating] = useState(false);
 
   const intervalRef = useRef(null);
 
@@ -41,21 +44,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (matchResult === true && intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-
-    if (matchResult !== true && !intervalRef.current) {
+    if (!intervalRef.current) {
       intervalRef.current = setInterval(() => {
         handleDetection();
-      }, 1000);
+      }, 500);
     }
-
+  
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
-  }, [matchResult]);
+  }, []);
+  
 
   const detectEmbedding = async () => {
     const video = videoRef.current;
@@ -83,7 +85,11 @@ function App() {
     if (!embedding) return;
 
     const quantized = quantize(embedding);
+    const hash = await getFaceHash(quantized);
+
     setRegistered(quantized);
+    setRegisteredHash(hash);
+    setRecognizedHash(null);
     setMatchResult(null);
     setDistance(null);
     setStatus("Face registered");
@@ -99,29 +105,37 @@ function App() {
     if (!embedding) return;
 
     const quantized = quantize(embedding);
-    const distSq = euclideanSquaredDistance(registered, quantized);
+    const distSq = euclideanSquaredDistance(quantized, registered);
     setDistance(distSq);
 
     setMatchResult("pending");
-    const zkProofOK = await runZKEqualityProof(registered, quantized);
+    const [zkProofOK, hashFromProof] = await runZKEqualityProof(quantized, registered);
     const match = distSq < MATCH_THRESHOLD && zkProofOK;
 
     setMatchResult(match);
     setStatus(match ? "Match: ✅" : "Match: ❌");
 
+    if (zkProofOK) {
+      setRecognizedHash(hashFromProof);
+    }
+
     if (match) {
+      clearInterval(intervalRef.current); // Stop detection loop immediately
+      intervalRef.current = null;
+      setCelebrating(true);
+    
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
-
+    
       video.pause();
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
+    
       const detection = await faceapi
         .detectSingleFace(canvas)
         .withFaceLandmarks();
-
-      if (detection && sunglassesImg) {
+    
+      if (detection && sunglassesImg && hatImg) {
         const leftEye = detection.landmarks.getLeftEye();
         const rightEye = detection.landmarks.getRightEye();
         const eyeCenterX = (leftEye[0].x + rightEye[3].x) / 2;
@@ -129,7 +143,7 @@ function App() {
         const eyeWidth = Math.abs(rightEye[3].x - leftEye[0].x) * 1.9;
         const glassesWidth = eyeWidth;
         const glassesHeight = eyeWidth / 2;
-
+    
         ctx.drawImage(
           sunglassesImg,
           eyeCenterX - glassesWidth / 2,
@@ -150,36 +164,77 @@ function App() {
       
         ctx.drawImage(hatImg, hatX, hatY, hatWidth, hatHeight);
       }
+    
+      setTimeout(() => {
+        video.play();
+        setMatchResult(null);
+        setRecognizedHash(null);
+        setDistance(null);
+        setStatus("Models loaded");
+        setCelebrating(false);
+      
+        // Resume detection
+        if (!intervalRef.current) {
+          intervalRef.current = setInterval(() => {
+            handleDetection();
+          }, 300);
+        }
+      }, 3000);
     }
+    
   };
 
   const handleDetection = async () => {
-    if (matchResult === true) return;
+    
     const video = videoRef.current;
     const canvas = canvasRef.current;
-
+  
     if (!video || !canvas || video.readyState !== 4) return;
-
+  
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-
-    const detection = await faceapi
-      .detectSingleFace(video)
-      .withFaceLandmarks()
-      .withFaceDescriptor();
-
+  
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (detection) {
-      faceapi.draw.drawDetections(canvas, [detection.detection]);
+  
+    try {
+      const detection = await faceapi
+        .detectSingleFace(video)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+  
+      if (detection) {
+        faceapi.draw.drawDetections(canvas, [detection.detection]);
+      } else {
+        console.log("No detection in frame.");
+      }
+    } catch (err) {
+      console.error("Face detection error:", err);
     }
   };
+  
 
   return (
     <div style={{ padding: "2rem", fontFamily: "sans-serif" }}>
       <h2>🎥 zkFace: Webcam Detection</h2>
       <p>{status}</p>
+      {registeredHash && (
+        <div style={{ marginTop: "1rem" }}>
+          <strong>Registered Face Hash:</strong>
+          <pre style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{registeredHash}</pre>
+        </div>
+      )}
+
+      {recognizedHash && (
+        <div style={{ marginTop: "1rem" }}>
+          <strong>Recognized Face Hash:</strong>
+          <pre style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{recognizedHash}</pre>
+          <p>
+            <strong>Hashes match:</strong>{" "}
+            {recognizedHash === registeredHash ? "✅ Yes" : "❌ No"}
+          </p>
+        </div>
+      )}
       <div style={{ position: "relative", maxWidth: "600px" }}>
         {matchResult === "pending" && (
           <div style={{
